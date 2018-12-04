@@ -28,6 +28,11 @@ import {
 import {AdsenseSharedState} from './adsense-shared-state';
 import {AmpA4A} from '../../amp-a4a/0.1/amp-a4a';
 import {CONSENT_POLICY_STATE} from '../../../src/consent-state';
+import {
+  DATA_ATTR_NAME,
+  RefreshManager, // eslint-disable-line no-unused-vars
+  getRefreshManager,
+} from '../../amp-a4a/0.1/refresh-manager';
 import {Navigation} from '../../../src/service/navigation';
 import {
   QQID_HEADER,
@@ -94,6 +99,13 @@ export function resetSharedState() {
 
 /** @type {string} */
 const FORMAT_EXP = 'as-use-attr-for-format';
+
+/** @type {string} */
+const REFRESH_EXP = 'adsense-ff-refresh';
+
+/** @type {string} */
+// TODO: fill me in!
+const REFRESH_EXP_ID = '0123456789';
 
 /** @final */
 export class AmpAdNetworkAdsenseImpl extends AmpA4A {
@@ -166,6 +178,9 @@ export class AmpAdNetworkAdsenseImpl extends AmpA4A {
      * @private {boolean}
      */
     this.shouldSandbox_ = false;
+
+    /** @private {?RefreshManager} */
+    this.refreshManager_ = null;
   }
 
   /**
@@ -281,6 +296,13 @@ export class AmpAdNetworkAdsenseImpl extends AmpA4A {
             Number(this.element.getAttribute('width')) > 0 &&
             Number(this.element.getAttribute('height')) > 0,
           branches: ['21062003', '21062004'],
+        },
+        // TODO: once submitted, add REFRESH_EXP fraction to prod/canary
+        // files to actually enable experiment.
+        [REFRESH_EXP]: {
+          isTrafficEligible: () => true,
+          // TODO: fill experiment IDS here!
+          branches: ['1234567890', REFRESH_EXP_ID],
         },
       });
     const setExps = randomlySelectUnsetExperiments(this.win, experimentInfoMap);
@@ -494,6 +516,25 @@ export class AmpAdNetworkAdsenseImpl extends AmpA4A {
       this.element.setAttribute('data-google-query-id', this.qqid_);
     }
     dev().assertElement(this.iframe).id = `google_ads_iframe_${this.ifi_}`;
+
+    if (getExperimentBranch(this.win, REFRESH_EXP) == REFRESH_EXP_ID) {
+      // Set element which configures refresh interval to every 30 seconds once
+      // viewable.
+      this.element.setAttribute(DATA_ATTR_NAME, 30);
+      if (this.isRefreshing) {
+        dev().assert(this.refreshManager_);
+        this.refreshManager_.initiateRefreshCycle();
+        this.isRefreshing = false;
+        this.isRelayoutNeededFlag = false;
+      }
+
+      this.refreshManager_ = this.refreshManager_ ||
+          getRefreshManager(this, () =>
+            // Refresh not allowed on carousel/sticky elements
+            !getEnclosingContainerTypes(this.element).filter(container =>
+              container != ValidAdContainerTypes['AMP-CAROUSEL'] &&
+                  container != ValidAdContainerTypes['AMP-STICKY-AD']).length);
+    }
   }
 
   /** @override */
@@ -516,6 +557,9 @@ export class AmpAdNetworkAdsenseImpl extends AmpA4A {
     this.qqid_ = null;
     this.isAmpCreative_ = null;
     this.shouldSandbox_ = false;
+    if (this.refreshManager_) {
+      this.refreshManager_.unobserve();
+    }
     return superResult;
   }
 
